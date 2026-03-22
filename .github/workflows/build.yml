@@ -1,0 +1,113 @@
+name: Build minimal geo files
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Install tools
+        run: |
+          go install github.com/urlesistiana/v2dat@latest
+          go install github.com/metacubex/geo2srs@latest
+
+      - name: Download source files
+        run: |
+          curl -L -o geosite-full.dat https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat
+          curl -L -o geoip-full.dat https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geoip.dat
+
+      - name: Extract categories
+        run: |
+          mkdir -p extracted/geosite extracted/geoip
+
+          # Извлекаем нужные категории из geosite
+          v2dat unpack geosite -o ./extracted/geosite \
+            -f category-ru \
+            -f category-gov-ru \
+            -f vk \
+            -f yandex \
+            -f mailru \
+            -f steam \
+            -f epicgames \
+            -f category-ads-all \
+            geosite-full.dat
+
+          # Извлекаем нужные категории из geoip
+          v2dat unpack geoip -o ./extracted/geoip \
+            -f ru \
+            -f private \
+            geoip-full.dat
+
+      - name: Pack .dat (Xray/V2ray)
+        run: |
+          v2dat pack geosite -o ./geosite.dat ./extracted/geosite/
+          v2dat pack geoip -o ./geoip.dat ./extracted/geoip/
+
+      - name: Convert to .mrs (Mihomo)
+        run: |
+          # geosite → .mrs
+          for f in ./extracted/geosite/*; do
+            name=$(basename "$f")
+            geo2srs -type domain -in "$f" -out "./geosite-${name}.mrs"
+          done
+
+          # geoip → .mrs
+          for f in ./extracted/geoip/*; do
+            name=$(basename "$f")
+            geo2srs -type ipcidr -in "$f" -out "./geoip-${name}.mrs"
+          done
+
+      - name: Convert to .srs (Sing-box)
+        run: |
+          # geosite → .srs
+          for f in ./extracted/geosite/*; do
+            name=$(basename "$f")
+            geo2srs -type domain -format srs -in "$f" -out "./geosite-${name}.srs"
+          done
+
+          # geoip → .srs
+          for f in ./extracted/geoip/*; do
+            name=$(basename "$f")
+            geo2srs -type ipcidr -format srs -in "$f" -out "./geoip-${name}.srs"
+          done
+
+      - name: Show sizes
+        run: |
+          echo "=== .dat ===" && du -sh *.dat
+          echo "=== .mrs ===" && du -sh *.mrs
+          echo "=== .srs ===" && du -sh *.srs
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          files: |
+            geosite.dat
+            geoip.dat
+            geosite-*.mrs
+            geoip-*.mrs
+            geosite-*.srs
+            geoip-*.srs
+          body: |
+            Auto-updated minimal geo files
+            
+            **Категории geosite:** category-ru, category-gov-ru, vk, yandex, mailru, steam, epicgames, category-ads-all
+            **Категории geoip:** ru, private
+            
+            | Формат | Клиент |
+            |--------|--------|
+            | .dat | Xray, V2ray, Happ |
+            | .mrs | Mihomo, Koala Clash |
+            | .srs | Sing-box |
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
