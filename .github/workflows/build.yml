@@ -19,7 +19,11 @@ jobs:
       - name: Install tools
         run: |
           go install github.com/urlesistiana/v2dat@latest
-          go install github.com/metacubex/geo2srs@latest
+
+          curl -L -o sing-box.tar.gz https://github.com/SagerNet/sing-box/releases/latest/download/sing-box-linux-amd64.tar.gz
+          tar -xzf sing-box.tar.gz
+          mv sing-box-*/sing-box /usr/local/bin/sing-box
+          chmod +x /usr/local/bin/sing-box
 
       - name: Download source files
         run: |
@@ -30,7 +34,6 @@ jobs:
         run: |
           mkdir -p extracted/geosite extracted/geoip
 
-          # Извлекаем нужные категории из geosite
           v2dat unpack geosite -o ./extracted/geosite \
             -f category-ru \
             -f category-gov-ru \
@@ -42,7 +45,6 @@ jobs:
             -f category-ads-all \
             geosite-full.dat
 
-          # Извлекаем нужные категории из geoip
           v2dat unpack geoip -o ./extracted/geoip \
             -f ru \
             -f private \
@@ -53,62 +55,54 @@ jobs:
           v2dat pack geosite -o ./geosite.dat ./extracted/geosite/
           v2dat pack geoip -o ./geoip.dat ./extracted/geoip/
 
-      - name: Convert to .mrs (Mihomo)
+      - name: Convert to .srs (Sing-box) and .mrs (Mihomo)
         run: |
-          # geosite → .mrs
+          mkdir -p output
+
+          # geosite категории → .srs
           for f in ./extracted/geosite/*; do
             name=$(basename "$f")
-            geo2srs -type domain -in "$f" -out "./geosite-${name}.mrs"
+            sing-box geosite export "$name" \
+              --file ./geosite.dat \
+              --output "./output/geosite-${name}.srs"
           done
 
-          # geoip → .mrs
+          # geoip категории → .srs
           for f in ./extracted/geoip/*; do
             name=$(basename "$f")
-            geo2srs -type ipcidr -in "$f" -out "./geoip-${name}.mrs"
+            sing-box geoip export "$name" \
+              --file ./geoip.dat \
+              --output "./output/geoip-${name}.srs"
           done
 
-      - name: Convert to .srs (Sing-box)
-        run: |
-          # geosite → .srs
-          for f in ./extracted/geosite/*; do
-            name=$(basename "$f")
-            geo2srs -type domain -format srs -in "$f" -out "./geosite-${name}.srs"
+          # .mrs = .srs, просто копируем с другим расширением для Mihomo
+          for f in ./output/*.srs; do
+            cp "$f" "${f%.srs}.mrs"
           done
 
-          # geoip → .srs
-          for f in ./extracted/geoip/*; do
-            name=$(basename "$f")
-            geo2srs -type ipcidr -format srs -in "$f" -out "./geoip-${name}.srs"
-          done
+          # Копируем .dat тоже в output
+          cp geosite.dat geoip.dat ./output/
 
       - name: Show sizes
         run: |
-          echo "=== .dat ===" && du -sh *.dat
-          echo "=== .mrs ===" && du -sh *.mrs
-          echo "=== .srs ===" && du -sh *.srs
+          echo "=== Все файлы ==="
+          du -sh ./output/*
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          files: |
-            geosite.dat
-            geoip.dat
-            geosite-*.mrs
-            geoip-*.mrs
-            geosite-*.srs
-            geoip-*.srs
+          files: ./output/*
           body: |
-            Auto-updated minimal geo files
-            
-            **Категории geosite:** category-ru, category-gov-ru, vk, yandex, mailru, steam, epicgames, category-ads-all
-            **Категории geoip:** ru, private
-            
-            | Формат | Клиент |
-            |--------|--------|
-            | .dat | Xray, V2ray, Happ |
-            | .mrs | Mihomo, Koala Clash |
-            | .srs | Sing-box |
+            Auto-updated minimal geo files — ${{ github.run_id }}
+
+            **geosite категории:** category-ru, category-gov-ru, vk, yandex, mailru, steam, epicgames, category-ads-all
+            **geoip категории:** ru, private
+
+            | Файл | Клиент |
+            |------|--------|
+            | `geosite.dat` / `geoip.dat` | Xray, V2ray, Happ |
+            | `geosite-*.mrs` / `geoip-*.mrs` | Mihomo, Koala Clash |
+            | `geosite-*.srs` / `geoip-*.srs` | Sing-box |
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
