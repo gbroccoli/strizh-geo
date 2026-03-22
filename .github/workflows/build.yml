@@ -23,7 +23,6 @@ jobs:
         run: |
           go install github.com/urlesistiana/v2dat@latest
 
-          # sing-box
           SING_BOX_VERSION=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/v//')
           echo "sing-box version: $SING_BOX_VERSION"
           curl -L -o sing-box.tar.gz "https://github.com/SagerNet/sing-box/releases/download/v${SING_BOX_VERSION}/sing-box-${SING_BOX_VERSION}-linux-amd64.tar.gz"
@@ -32,16 +31,12 @@ jobs:
           chmod +x /usr/local/bin/sing-box
           sing-box version
 
-          # v2ray-core для сборки минимальных .dat
           V2RAY_VERSION=$(curl -s https://api.github.com/repos/v2fly/v2ray-core/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
           echo "v2ray version: $V2RAY_VERSION"
           curl -L -o v2ray.zip "https://github.com/v2fly/v2ray-core/releases/download/${V2RAY_VERSION}/v2ray-linux-64.zip"
-          unzip -o v2ray.zip v2ray geosite.dat geoip.dat -d /tmp/v2ray/
-          chmod +x /tmp/v2ray/v2ray
-          /tmp/v2ray/v2ray version
-
-          # domain-list-community компилятор
-          go install github.com/v2fly/domain-list-community/cmd/v2ray-domain-list-community-compiler@latest
+          unzip -o v2ray.zip v2ray -d /usr/local/bin/
+          chmod +x /usr/local/bin/v2ray
+          v2ray version
 
       - name: Download source files
         run: |
@@ -72,45 +67,12 @@ jobs:
           ls -la extracted/geosite/
           ls -la extracted/geoip/
 
-      - name: Build minimal geosite.dat via v2ray-core
+      - name: Build minimal .dat (Xray/V2ray)
         run: |
           mkdir -p output
-          mkdir -p /tmp/domain-list-community/data
 
-          # Конвертируем .txt файлы в формат domain-list-community
-          for f in ./extracted/geosite/*.txt; do
-            name=$(basename "$f" .txt | sed 's/geosite-full_//')
-            echo "Подготавливаем geosite: $name"
-            out_file="/tmp/domain-list-community/data/${name}"
-            > "$out_file"
-            while IFS= read -r line; do
-              line=$(echo "$line" | tr -d '[:space:]')
-              [[ -z "$line" || "$line" == \#* ]] && continue
-              # Убираем leading dot если есть
-              line="${line#.}"
-              echo "full:${line}" >> "$out_file"
-            done < "$f"
-          done
-
-          echo "=== Файлы domain-list ==="
-          ls -la /tmp/domain-list-community/data/
-
-          # Компилируем в geosite.dat
-          cd /tmp/domain-list-community
-          v2ray-domain-list-community-compiler \
-            --datapath ./data \
-            --outputpath "$(pwd)/../../$(pwd)/output/geosite.dat" \
-            --exportlists $(ls data/ | tr '\n' ',' | sed 's/,$//')
-
-          ls -la output/geosite.dat || echo "Файл не создан"
-
-      - name: Build minimal geoip.dat via v2ray-core
-        run: |
-          # Используем v2dat для конвертации извлечённых IP в новый .dat
-          # v2ray geoip формат собирается через go скрипт
           python3 << 'EOF'
           import os
-          import ipaddress
           import struct
 
           def encode_varint(n):
@@ -125,47 +87,66 @@ jobs:
                       break
               return result
 
-          def encode_len_field(field_number, data):
-              tag = encode_varint((field_number << 3) | 2)
-              return tag + encode_varint(len(data)) + data
+          def encode_field(field_number, wire_type, data):
+              tag = (field_number << 3) | wire_type
+              return encode_varint(tag) + encode_varint(len(data)) + data
 
-          def encode_varint_field(field_number, value):
-              tag = encode_varint((field_number << 3) | 0)
-              return tag + encode_varint(value)
+          def build_geosite_dat(src_dir, out_path):
+              entries = b''
+              for fname in sorted(os.listdir(src_dir)):
+                  if not fname.endswith('.txt'):
+                      continue
+                  tag = fname.replace('geosite-full_', '').replace('.txt', '')
+                  lines = open(f'{src_dir}/{fname}').read().splitlines()
 
-          def ip_to_cidr_proto(cidr_str):
-              net = ipaddress.ip_network(cidr_str, strict=False)
-              ip_bytes = net.network_address.packed
-              prefix = net.prefixlen
-              msg = b''
-              msg += encode_len_field(1, ip_bytes)   # ip
-              msg += encode_varint_field(2, prefix)   # prefix
-              return msg
+                  entry = b''
+                  # field 1: tag
+                  entry += encode_field(1, 2, tag.encode())
+                  # field 2: domains (type=2 means Domain, value=3 means RootDomain)
+                  for line in lines:
+                      line = line.strip()
+                      if not line or line.startswith('#'):
+                          continue
+                      domain_msg = b''
+                      domain_msg += encode_field(1, 0, b'\x02')  # type = Domain
+                      domain_msg += encode_field(2, 2, line.encode())  # value
+                      entry += encode_field(2, 2, domain_msg)
+
+                  entries += encode_field(1, 2, entry)
+                  print(f"  geosite tag: {tag}, domains: {len([l for l in lines if l and not l.startswith('#')])}")
+
+              open(out_path, 'wb').write(entries)
+              size = os.path.getsize(out_path)
+              print(f"geosite.dat: {size/1024:.1f} KB")
 
           def build_geoip_dat(src_dir, out_path):
-              result = b''
+              entries = b''
               for fname in sorted(os.listdir(src_dir)):
                   if not fname.endswith('.txt'):
                       continue
                   tag = fname.replace('geoip-full_', '').replace('.txt', '').upper()
                   lines = open(f'{src_dir}/{fname}').read().splitlines()
-                  cidrs = [l.strip() for l in lines if l.strip() and not l.startswith('#')]
 
                   entry = b''
-                  entry += encode_len_field(1, tag.encode())  # country_code
-                  for cidr in cidrs:
-                      try:
-                          cidr_proto = ip_to_cidr_proto(cidr)
-                          entry += encode_len_field(2, cidr_proto)
-                      except Exception as e:
-                          print(f"  skip {cidr}: {e}")
+                  # field 1: country_code
+                  entry += encode_field(1, 2, tag.encode())
+                  # field 2: cidr list
+                  for line in lines:
+                      line = line.strip()
+                      if not line or line.startswith('#'):
+                          continue
+                      # CIDR как строка
+                      cidr_msg = encode_field(1, 2, line.encode())
+                      entry += encode_field(2, 2, cidr_msg)
 
-                  result += encode_len_field(1, entry)
-                  print(f"  geoip: {tag}, cidrs: {len(cidrs)}")
+                  entries += encode_field(1, 2, entry)
+                  print(f"  geoip tag: {tag}, cidrs: {len([l for l in lines if l and not l.startswith('#')])}")
 
-              open(out_path, 'wb').write(result)
-              print(f"geoip.dat: {os.path.getsize(out_path)/1024:.1f} KB")
+              open(out_path, 'wb').write(entries)
+              size = os.path.getsize(out_path)
+              print(f"geoip.dat: {size/1024:.1f} KB")
 
+          build_geosite_dat('./extracted/geosite', './output/geosite.dat')
           build_geoip_dat('./extracted/geoip', './output/geoip.dat')
           EOF
 
@@ -174,6 +155,7 @@ jobs:
           for f in ./extracted/geosite/*.txt; do
             name=$(basename "$f" .txt | sed 's/geosite-full_//')
             echo "geosite: $name"
+
             python3 -c "
           import json
           domains = open('$f').read().splitlines()
@@ -193,6 +175,7 @@ jobs:
           for f in ./extracted/geoip/*.txt; do
             name=$(basename "$f" .txt | sed 's/geoip-full_//')
             echo "geoip: $name"
+
             python3 -c "
           import json
           cidrs = open('$f').read().splitlines()
