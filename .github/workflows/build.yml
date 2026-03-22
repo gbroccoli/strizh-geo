@@ -20,10 +20,16 @@ jobs:
         run: |
           go install github.com/urlesistiana/v2dat@latest
 
-          curl -L -o sing-box.tar.gz https://github.com/SagerNet/sing-box/releases/latest/download/sing-box-linux-amd64.tar.gz
+          SING_BOX_VERSION=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/v//')
+          echo "sing-box version: $SING_BOX_VERSION"
+
+          curl -L -o sing-box.tar.gz "https://github.com/SagerNet/sing-box/releases/download/v${SING_BOX_VERSION}/sing-box-${SING_BOX_VERSION}-linux-amd64.tar.gz"
+
+          file sing-box.tar.gz
           tar -xzf sing-box.tar.gz
-          mv sing-box-*/sing-box /usr/local/bin/sing-box
+          mv "sing-box-${SING_BOX_VERSION}-linux-amd64/sing-box" /usr/local/bin/sing-box
           chmod +x /usr/local/bin/sing-box
+          sing-box version
 
       - name: Download source files
         run: |
@@ -59,7 +65,6 @@ jobs:
         run: |
           mkdir -p output
 
-          # geosite категории → .srs
           for f in ./extracted/geosite/*; do
             name=$(basename "$f")
             sing-box geosite export "$name" \
@@ -67,7 +72,6 @@ jobs:
               --output "./output/geosite-${name}.srs"
           done
 
-          # geoip категории → .srs
           for f in ./extracted/geoip/*; do
             name=$(basename "$f")
             sing-box geoip export "$name" \
@@ -75,12 +79,10 @@ jobs:
               --output "./output/geoip-${name}.srs"
           done
 
-          # .mrs = .srs, просто копируем с другим расширением для Mihomo
           for f in ./output/*.srs; do
             cp "$f" "${f%.srs}.mrs"
           done
 
-          # Копируем .dat тоже в output
           cp geosite.dat geoip.dat ./output/
 
       - name: Show sizes
