@@ -62,24 +62,44 @@ jobs:
         run: |
           mkdir -p output
 
-          for f in ./extracted/geosite/*; do
-            name=$(basename "$f")
+          for f in ./extracted/geosite/*.txt; do
+            name=$(basename "$f" .txt | sed 's/geosite-full_//')
             echo "geosite: $name"
-            sing-box rule-set convert \
-              --type geosite \
-              --file "$(pwd)/geosite-full.dat" \
-              --output "$(pwd)/output/geosite-${name}.srs" \
-              "$name"
+
+            python3 -c "
+          import json
+          domains = open('$f').read().splitlines()
+          rules = {
+            'version': 1,
+            'rules': [{
+              'domain_suffix': [d.lstrip('.') for d in domains if d and not d.startswith('#')]
+            }]
+          }
+          json.dump(rules, open('/tmp/${name}-geosite.json', 'w'))
+          "
+            sing-box rule-set compile \
+              --output "./output/geosite-${name}.srs" \
+              "/tmp/${name}-geosite.json"
           done
 
-          for f in ./extracted/geoip/*; do
-            name=$(basename "$f")
+          for f in ./extracted/geoip/*.txt; do
+            name=$(basename "$f" .txt | sed 's/geoip-full_//')
             echo "geoip: $name"
-            sing-box rule-set convert \
-              --type geoip \
-              --file "$(pwd)/geoip-full.dat" \
-              --output "$(pwd)/output/geoip-${name}.srs" \
-              "$name"
+
+            python3 -c "
+          import json
+          cidrs = open('$f').read().splitlines()
+          rules = {
+            'version': 1,
+            'rules': [{
+              'ip_cidr': [c for c in cidrs if c and not c.startswith('#')]
+            }]
+          }
+          json.dump(rules, open('/tmp/${name}-geoip.json', 'w'))
+          "
+            sing-box rule-set compile \
+              --output "./output/geoip-${name}.srs" \
+              "/tmp/${name}-geoip.json"
           done
 
           # .mrs = .srs для Mihomo
@@ -87,7 +107,7 @@ jobs:
             cp "$f" "${f%.srs}.mrs"
           done
 
-          # .dat для Xray/V2ray — просто копируем полные файлы с нужными категориями
+          # .dat для Xray/V2ray
           cp geosite-full.dat ./output/geosite.dat
           cp geoip-full.dat ./output/geoip.dat
 
