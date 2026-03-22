@@ -24,8 +24,6 @@ jobs:
           echo "sing-box version: $SING_BOX_VERSION"
 
           curl -L -o sing-box.tar.gz "https://github.com/SagerNet/sing-box/releases/download/v${SING_BOX_VERSION}/sing-box-${SING_BOX_VERSION}-linux-amd64.tar.gz"
-
-          file sing-box.tar.gz
           tar -xzf sing-box.tar.gz
           mv "sing-box-${SING_BOX_VERSION}-linux-amd64/sing-box" /usr/local/bin/sing-box
           chmod +x /usr/local/bin/sing-box
@@ -56,10 +54,9 @@ jobs:
             -f private \
             geoip-full.dat
 
-      - name: Pack .dat (Xray/V2ray)
-        run: |
-          v2dat pack geosite -o ./geosite.dat ./extracted/geosite/
-          v2dat pack geoip -o ./geoip.dat ./extracted/geoip/
+          echo "=== Извлечённые файлы ==="
+          ls -la extracted/geosite/
+          ls -la extracted/geoip/
 
       - name: Convert to .srs (Sing-box) and .mrs (Mihomo)
         run: |
@@ -67,23 +64,32 @@ jobs:
 
           for f in ./extracted/geosite/*; do
             name=$(basename "$f")
-            sing-box geosite export "$name" \
-              --file ./geosite.dat \
-              --output "./output/geosite-${name}.srs"
+            echo "geosite: $name"
+            sing-box rule-set convert \
+              --type geosite \
+              --file "$(pwd)/geosite-full.dat" \
+              --output "$(pwd)/output/geosite-${name}.srs" \
+              "$name"
           done
 
           for f in ./extracted/geoip/*; do
             name=$(basename "$f")
-            sing-box geoip export "$name" \
-              --file ./geoip.dat \
-              --output "./output/geoip-${name}.srs"
+            echo "geoip: $name"
+            sing-box rule-set convert \
+              --type geoip \
+              --file "$(pwd)/geoip-full.dat" \
+              --output "$(pwd)/output/geoip-${name}.srs" \
+              "$name"
           done
 
+          # .mrs = .srs для Mihomo
           for f in ./output/*.srs; do
             cp "$f" "${f%.srs}.mrs"
           done
 
-          cp geosite.dat geoip.dat ./output/
+          # .dat для Xray/V2ray — просто копируем полные файлы с нужными категориями
+          cp geosite-full.dat ./output/geosite.dat
+          cp geoip-full.dat ./output/geoip.dat
 
       - name: Show sizes
         run: |
